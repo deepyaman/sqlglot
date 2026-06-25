@@ -6,12 +6,37 @@ import typing as t
 # https://docs.python.org/3/library/time.html#time.strftime
 from sqlglot.trie import TrieResult, in_trie, new_trie
 
-# "Strict" canonical time formats round-trip in dialects that define them (e.g.
-# Spark 3+'s zero-padded MM/dd, which don't parse single-digit values) and degrade
-# to their lax counterpart elsewhere. These are sqlglot-internal tokens, not valid
-# strftime directives, so they must be normalized away when emitting generic SQL.
-STRICT_TIME_FORMATS = {"%mstrict": "%m", "%dstrict": "%d"}
-STRICT_TIME_TRIE = new_trie(STRICT_TIME_FORMATS)
+# The canonical strftime %m/%d are role-overloaded: when *parsing* a string they're
+# lenient (single digits allowed), but when *formatting* they're zero-padded. Some
+# dialects (e.g. Spark 3+) need a different token per role, so when binding a format to a
+# *parse* expression the canonical IR records the role explicitly: %m -> %mparse (lenient)
+# and the dialect's strict padded token %mstrict (e.g. Spark's MM) -> %mparsestrict. Each
+# dialect's INVERSE_TIME_MAPPING then maps these back context-free (see `_with_time_roles`).
+# Format expressions keep the plain %m/%-m (every dialect already inverts those); they only
+# degrade the strict token %mstrict -> %m so it never leaks. These role tokens are
+# sqlglot-internal and are not valid strftime directives.
+PARSE_TIME_ROLES = {
+    "%mstrict": "%mparsestrict",
+    "%m": "%mparse",
+    "%dstrict": "%dparsestrict",
+    "%d": "%dparse",
+}
+FORMAT_TIME_ROLES = {
+    "%mstrict": "%m",
+    "%dstrict": "%d",
+}
+PARSE_TIME_ROLES_TRIE = new_trie(PARSE_TIME_ROLES)
+FORMAT_TIME_ROLES_TRIE = new_trie(FORMAT_TIME_ROLES)
+
+
+def apply_time_role(format_string: str | None, parse: bool) -> str | None:
+    """Rewrite the month/day specifiers of a canonical strftime string to role-explicit tokens."""
+    if not format_string:
+        return format_string
+
+    if parse:
+        return format_time(format_string, PARSE_TIME_ROLES, PARSE_TIME_ROLES_TRIE)
+    return format_time(format_string, FORMAT_TIME_ROLES, FORMAT_TIME_ROLES_TRIE)
 
 
 def format_time(

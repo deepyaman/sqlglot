@@ -24,6 +24,7 @@ from sqlglot.dialects.dialect import (
 )
 from sqlglot.generator import unsupported_args
 from sqlglot.helper import is_int
+from sqlglot.time import format_time
 from collections import defaultdict
 
 DATETIME_DELTA = t.Union[exp.DateAdd, exp.DateDiff, exp.DateSub, exp.TimestampSub, exp.TimestampAdd]
@@ -454,7 +455,18 @@ class ClickHouseGenerator(generator.Generator):
         return offset
 
     def strtodate_sql(self, expression: exp.StrToDate) -> str:
-        strtodate_sql = self.function_fallback_sql(expression)
+        # The fallback emits the format verbatim, so render it off a copy whose role tokens
+        # have been inverted (copying the original would detach it from its parent below).
+        fmt = expression.args.get("format")
+        if isinstance(fmt, exp.Literal) and fmt.is_string:
+            rendered = expression.copy()
+            inverted = format_time(
+                fmt.this, self.dialect.INVERSE_TIME_MAPPING, self.dialect.INVERSE_TIME_TRIE
+            )
+            rendered.set("format", exp.Literal.string(inverted))
+            strtodate_sql = self.function_fallback_sql(rendered)
+        else:
+            strtodate_sql = self.function_fallback_sql(expression)
 
         if not isinstance(expression.parent, exp.Cast):
             # StrToDate returns DATEs in other dialects (eg. postgres), so

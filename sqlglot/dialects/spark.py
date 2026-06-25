@@ -16,21 +16,23 @@ class Spark(Spark2):
     ARRAY_FUNCS_PROPAGATES_NULLS = True
     EXPRESSION_METADATA = EXPRESSION_METADATA.copy()
 
-    # Spark 3+ parses MM/dd strictly (single-digit months/days don't parse), unlike the
-    # lax %m/%d other dialects produce. When *parsing* (StrToTime/StrToDate/...), MM/dd
-    # map to a distinct canonical token so the strict roundtrip is preserved; formatting
-    # keeps the regular padded %m/%d -> MM/dd (TIME_MAPPING is unchanged).
-    STRICT_TIME_MAPPING = {
+    # Spark 3+ parses MM/dd strictly (single digits don't parse), unlike the lax %m/%d
+    # of other dialects. Mapping MM/dd to the strict tokens lets the read side record the
+    # strictness, so a parsed MM round-trips back to MM while a lenient %m widens to M.
+    TIME_MAPPING = {
         **Spark2.TIME_MAPPING,
         "MM": "%mstrict",
         "dd": "%dstrict",
     }
-    # Generating a parse format is lenient: %m/%d -> M/d (matching strptime), while the
-    # strict tokens map back to MM/dd.
-    LENIENT_INVERSE_TIME_MAPPING = {
-        **{v: k for k, v in STRICT_TIME_MAPPING.items()},
-        "%m": "M",
-        "%d": "d",
+
+    # Because MM/dd now map to the strict tokens, the plain %m/%d are restored here so a
+    # *formatting* %m still emits the padded MM. The lenient-parse role then overrides to
+    # the non-padded M/d (Spark parses leniently); the strict-parse role auto-derives to MM.
+    INVERSE_TIME_MAPPING = {
+        "%m": "MM",
+        "%d": "dd",
+        "%mparse": "M",
+        "%dparse": "d",
     }
 
     class Tokenizer(Spark2.Tokenizer):

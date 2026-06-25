@@ -69,6 +69,9 @@ class BigQuery(Dialect):
         # Preserve %E6S instead of expanding to %T.%f - since both %E6S & %T.%f are semantically different in BigQuery
         # %E6S is semantically different from %T.%f: %E6S works as a single atomic specifier for seconds with microseconds, while %T.%f expands incorrectly and fails to parse.
         "%H:%M:%S.%f": "%H:%M:%E6S",
+        # The parse-role month/day tokens split the %Y-%m-%d sequence, so the composite
+        # %F inverse must be repeated for the tagged form to survive the round-trip.
+        "%Y-%mparse-%dparse": "%F",
     }
 
     FORMAT_MAPPING = {

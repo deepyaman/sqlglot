@@ -11,7 +11,7 @@ from sqlglot.errors import ErrorLevel, UnsupportedError, concat_messages
 from sqlglot.expressions import apply_index_offset
 from sqlglot.helper import csv, name_sequence, seq_get
 from sqlglot.jsonpath import ALL_JSON_PATH_PARTS, JSON_PATH_PART_TRANSFORMS
-from sqlglot.time import STRICT_TIME_FORMATS, STRICT_TIME_TRIE, format_time
+from sqlglot.time import apply_time_role, format_time
 from sqlglot.tokens import TokenType
 
 if t.TYPE_CHECKING:
@@ -4052,15 +4052,13 @@ class Generator:
 
     # Base implementation that excludes safe, zone, and target_type metadata args
     def strtotime_sql(self, expression: exp.StrToTime) -> str:
-        # STR_TO_TIME is sqlglot's canonical form, so the format must stay canonical
-        # strftime - we only strip the internal "strict" tokens (e.g. Spark's %mstrict)
-        # rather than routing through self.format_time(), which would also rewrite every
-        # other specifier into the dialect's INVERSE_TIME_MAPPING.
-        return self.func(
-            "STR_TO_TIME",
-            expression.this,
-            self.format_time(expression, STRICT_TIME_FORMATS, STRICT_TIME_TRIE),
-        )
+        # STR_TO_TIME is canonical strftime, but the format may carry role-explicit
+        # month/day tokens (e.g. %mparse); format_time maps those back via INVERSE.
+        return self.func("STR_TO_TIME", expression.this, self.format_time(expression))
+
+    def strtodate_sql(self, expression: exp.StrToDate) -> str:
+        # As with STR_TO_TIME, route the format through format_time to invert role tokens.
+        return self.func("STR_TO_DATE", expression.this, self.format_time(expression))
 
     def currentdate_sql(self, expression: exp.CurrentDate) -> str:
         zone = self.sql(expression, "this")
@@ -5215,11 +5213,14 @@ class Generator:
                 self.unsupported(f"Unsupported T-SQL 'style' value: {style_value}")
 
             fmt = exp.Literal.string(converted_style)
+            # The style is canonical strftime; parse expressions additionally tag the
+            # month/day so the target dialect can invert the lenient/strict role.
+            parse_fmt = exp.Literal.string(apply_time_role(converted_style, parse=True))
 
             if to.this == exp.DType.DATE:
-                transformed = exp.StrToDate(this=value, format=fmt)
+                transformed = exp.StrToDate(this=value, format=parse_fmt)
             elif to.this in (exp.DType.DATETIME, exp.DType.DATETIME2):
-                transformed = exp.StrToTime(this=value, format=fmt)
+                transformed = exp.StrToTime(this=value, format=parse_fmt)
             elif to.this in self.PARAMETERIZABLE_TEXT_TYPES:
                 transformed = cast(this=exp.TimeToStr(this=value, format=fmt), to=to, safe=safe)
             elif to.this == exp.DType.TEXT:

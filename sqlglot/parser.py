@@ -18,7 +18,7 @@ from sqlglot.errors import (
 from sqlglot.expressions import apply_index_offset
 from sqlglot.helper import ensure_list, i64, seq_get
 from sqlglot.trie import new_trie
-from sqlglot.time import format_time
+from sqlglot.time import apply_time_role, format_time
 from sqlglot.tokens import Token, Tokenizer, TokenType
 from sqlglot.trie import TrieResult, in_trie
 from collections.abc import Sequence
@@ -128,6 +128,19 @@ def build_mod(args: BuilderArgs) -> exp.Mod:
     expression = exp.Paren(this=expression) if isinstance(expression, exp.Binary) else expression
 
     return exp.Mod(this=this, expression=expression)
+
+
+def build_canonical_parse_time(exp_class: Type[exp.Func]) -> t.Callable[[BuilderArgs], exp.Func]:
+    # Canonical parse functions (STR_TO_TIME/STR_TO_DATE) already carry strftime formats, so
+    # they skip build_formatted_time; tag their month/day with the parse role here instead.
+    def _builder(args: BuilderArgs) -> exp.Func:
+        expr = exp_class.from_arg_list(args)
+        fmt = expr.args.get("format")
+        if isinstance(fmt, exp.Literal) and fmt.is_string:
+            expr.set("format", exp.Literal.string(apply_time_role(fmt.this, parse=True)))
+        return expr
+
+    return _builder
 
 
 def build_pad(args: BuilderArgs, is_left: bool = True):
@@ -327,6 +340,8 @@ class Parser:
 
     FUNCTIONS: t.ClassVar[dict[str, t.Callable]] = {
         **{name: func.from_arg_list for name, func in exp.FUNCTION_BY_NAME.items()},
+        "STR_TO_TIME": build_canonical_parse_time(exp.StrToTime),
+        "STR_TO_DATE": build_canonical_parse_time(exp.StrToDate),
         **dict.fromkeys(("COALESCE", "IFNULL", "NVL"), build_coalesce),
         "ARRAY": lambda args, dialect: exp.Array(expressions=args),
         "ARRAYAGG": lambda args, dialect: exp.ArrayAgg(
@@ -7850,10 +7865,13 @@ class Parser:
                     (exp.StrToDate if to.this == exp.DType.DATE else exp.StrToTime)(
                         this=this,
                         format=exp.Literal.string(
-                            format_time(
-                                fmt_string.this if fmt_string else "",
-                                self.dialect.FORMAT_MAPPING or self.dialect.TIME_MAPPING,
-                                self.dialect.FORMAT_TRIE or self.dialect.TIME_TRIE,
+                            apply_time_role(
+                                format_time(
+                                    fmt_string.this if fmt_string else "",
+                                    self.dialect.FORMAT_MAPPING or self.dialect.TIME_MAPPING,
+                                    self.dialect.FORMAT_TRIE or self.dialect.TIME_TRIE,
+                                ),
+                                parse=True,
                             )
                         ),
                         safe=safe,
